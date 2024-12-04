@@ -8,7 +8,7 @@ import torch.nn.functional as F
 from models.base_vae import BaseVAE
 from models.encoders import ConvEncoder
 from models.decoders import ConvDecoder
-
+#%%
 class VanillaVAE(nn.Module): # BaseVAE):
     def __init__(self,
                 latent_dim: int,
@@ -29,18 +29,15 @@ class VanillaVAE(nn.Module): # BaseVAE):
 
         # Compute the shape of the encoder output
         with torch.no_grad():
-            self._encoder_shape = self.encoder(torch.zeros(1, in_channels, width, height)).shape
+            self.raw_encout_shape= self.encoder(torch.zeros(1, in_channels, width, height)).shape
 
-        # Compute the shape of tensor if we want to get the decoder output same as the input image
-        
+        self.flatten_dim = self.raw_encout_shape[1:].numel()
+        self.fc_mu = nn.Linear(self.flatten_dim, latent_dim)
+        self.fc_var = nn.Linear(self.flatten_dim, latent_dim)
 
-        self.fc_mu = nn.Linear(self._encoder_shape.numel(), latent_dim)
-        self.fc_var = nn.Linear(self._encoder_shape.numel(), latent_dim)
 
-        self.decoder_input = nn.Linear(latent_dim, self._encoder_shape.numel())
-        self.decoder = ConvDecoder(hidden_dims[::-1], in_channels)
-        self.decoder_final = nn.Sequential(*[nn.Sigmoid()])
-
+        self.decoder_fc = nn.Linear(latent_dim, self.flatten_dim)
+        self.decoder = ConvDecoder(hidden_dims=hidden_dims[::-1], output_channels=in_channels)
 
     def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor]:
         x = self.encoder(x)
@@ -50,11 +47,10 @@ class VanillaVAE(nn.Module): # BaseVAE):
         return mu, log_var
 
     def decode(self, z: torch.Tensor) -> torch.Tensor:
-        x = self.decoder_input(z)
-        x = x.view(-1, *self._encoder_shape[1:])
-        x = self.decoder(x)
-        x = self.decoder_final(x)
-        return x
+        x_hat = self.decoder_fc(z)
+        x_hat = x_hat.view(-1, *self.raw_encout_shape[1:])
+        x_hat = self.decoder(x_hat)
+        return x_hat
 
     def reparameterize(self, mu: torch.Tensor, log_var: torch.Tensor) -> torch.Tensor:
         std = torch.exp(0.5 * log_var)
@@ -65,33 +61,45 @@ class VanillaVAE(nn.Module): # BaseVAE):
         mu, log_var = self.encode(x)
         z = self.reparameterize(mu, log_var)
         x_hat = self.decode(z)
-        return self.decode(z), x, mu, log_var
+        return x_hat, x, mu, log_var
 
-#%%
+    def loss_function(self, model_output, **kwargs) -> dict:
+        x_hat, x, mu, log_var = model_output
+
+        # Reconstruction loss
+        recons_loss = F.mse_loss(x_hat, x, reduction='sum')
+
+        # KL Divergence
+        kl_div = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
+
+        if kwargs.get('kld_weight', 1) != 1:
+            kl_div = kl_div * kwargs['kld_weight']
+
+        loss = recons_loss + kl_div
+        return {'loss': loss, 
+                'Reconstruction_Loss':recons_loss.detach(), 
+                'KLD':-kl_div.detach()}
+    
+# %%
 if __name__ == "__main__":
-    vae_config = {
-        'in_channels': 1,
+    config = {
+        'in_channels': 3,
         'latent_dim': 2,
         'hidden_dims': [32, 64, ],
-        'width': 28, 'height': 28}
+        'width': 32, 'height': 32}
+    
+    vae = VanillaVAE(**config)
+    # print(vae)
 
-    vae_model = VanillaVAE(**vae_config).eval()
-    dummy_input = torch.randn(7, *(vae_config[k] for k in['in_channels', 'width', 'height']))
+    dummy_input = torch.randn(7, *(config[k] for k in ['in_channels', 'width', 'height']))
+    print("dummy_input.shape=", dummy_input.shape)
 
-    mu, log_var = vae_model.encode(dummy_input)
-    z = vae_model.reparameterize(mu, log_var)
-    print("z.shape=", z.shape)
-    print("z=", z)
-
-    decoder_input = vae_model.decoder_input(z)
-    print("decoder_input.shape=", decoder_input.shape)
-
-    x_hat = vae_model.decode(z)
+    x_hat, x, mu, log_var = vae(dummy_input)
     print("x_hat.shape=", x_hat.shape)
-    # # Perform a forward pass
-    # output = vae_model(dummy_input)
-    # print("output[0].shape=", output[0].shape)
-    # print("output[1].shape=", output[1].shape)
-    # print("output[2].shape=", output[2].shape) 
-    # print("output[3].shape=", output[3].shape)   # Check reconstruction and input shapes
+    print("x.shape=", x.shape)
+    print("mu.shape=", mu.shape)
+    print("log_var.shape=", log_var.shape)
+
+    loss = vae.loss_function([x_hat, x, mu, log_var])
+    print("loss: ", loss)
 # %%

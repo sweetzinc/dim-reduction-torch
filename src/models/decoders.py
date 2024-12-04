@@ -1,30 +1,92 @@
-#%%
+# %%
 import torch
 import torch.nn as nn
-from models.encoders import LinearEncoder
+from models.encoders import LinearEncoder, ConvEncoder
 
 
-class ConvDecoder(nn.Module): 
-    def __init__(self, hidden_dims, output_channels):
+class ConvDecoder(nn.Module):
+    def __init__(self, hidden_dims=[128,64,32], output_channels=3):
         super().__init__()
-        layers = []
+        self.hidden_dims = hidden_dims
+
+        modules = []
+        # Build Decoder Layers
         for i in range(len(hidden_dims) - 1):
-            layers.append(
-                nn.ConvTranspose2d(hidden_dims[i], hidden_dims[i + 1],
-                                    kernel_size=3, stride=2, padding=1, output_padding=1)
+            modules.append(
+                nn.Sequential(
+                    nn.ConvTranspose2d(hidden_dims[i],
+                                       hidden_dims[i + 1],
+                                       kernel_size=3,
+                                       stride=2,
+                                       padding=1,
+                                       output_padding=1),
+                    nn.BatchNorm2d(hidden_dims[i + 1]),
+                    nn.LeakyReLU())
             )
-            layers.append(nn.BatchNorm2d(hidden_dims[i + 1]))
-            layers.append(nn.LeakyReLU())
-        layers.append(
-            nn.Conv2d(hidden_dims[-1], output_channels, kernel_size=3, padding=1)
+
+        self.decoder = nn.Sequential(*modules)
+        self.final_layer = nn.Sequential(
+            nn.ConvTranspose2d(hidden_dims[-1],
+                               output_channels,
+                               kernel_size=3,
+                               stride=2,
+                               padding=1,
+                               output_padding=1),
+            nn.Sigmoid()  
         )
 
-        self.decoder = nn.Sequential(*layers)
-    
-    def forward(self, x):
-        return self.decoder(x)
+    def forward(self, z):
+        x_hat = self.decoder(z)
+        x_hat = self.final_layer(x_hat)
+        return x_hat
 
+# %%
+if __name__ == "__main__":
 
+    vae_config = {
+        'in_channels': 64,
+        'latent_dim': 2,
+        'hidden_dims': [32, 64, ],
+        'width': 8, 'height': 8}
+    hidden_dims = vae_config['hidden_dims'][::-1]
+
+    dummy_input = torch.randn(
+        7, *(vae_config[k] for k in ['in_channels', 'width', 'height']))
+    print("dummy_input.shape=", dummy_input.shape)
+ 
+    decoder = ConvDecoder(hidden_dims=hidden_dims, output_channels=3)
+    decoder_output = decoder(dummy_input)
+
+    print("decoder_output.shape=", decoder_output.shape)
+
+#%%
+if __name__ == "__main__":
+    # input_width = 28
+    # padding = 0
+    # kernel_size = 3
+    # stride = 1
+    # dilation = 1
+    # output_width = (input_width + 2*padding - dilation*(kernel_size-1) - 1)
+    # output_width = output_width//stride + 1
+    # print("output_width=", output_width)
+
+    # conv = nn.Conv2d(1, 32, kernel_size=kernel_size, stride=stride, padding=padding)
+    # x = torch.randn(7, 1, input_width, input_width)
+    # y = conv(x)
+    # print("y.shape=", y.shape)
+
+    # For fixing the output width to be the same as the input width
+    # fix stride and dilation to 1, find kernel size
+    padding = 0
+    desired_output_width = 28 
+    kernel_size = decoder_output.shape[-1] - desired_output_width + 1 + 2*padding
+    print("kernel_size=", kernel_size)
+
+    conv = nn.Conv2d(1, 32, kernel_size=kernel_size, stride=1, padding=padding)
+    x = torch.randn(7, 1, decoder_output.shape[-1], decoder_output.shape[-1])
+    y = conv(x)
+    print("y.shape=", y.shape)
+#%%
 class LinearDecoder(nn.Module):
     def __init__(self, latent_dim, hidden_dims, output_dim=None):
         """latent_dim: Size of the latent space, input to the decoder."""
@@ -56,6 +118,7 @@ class LinearAutoencoder(nn.Module):
             return latent
         reconstructed = self.decoder(latent)
         return reconstructed
+
 
 class MultiChannelLinearAutoencoder(nn.Module):
     def __init__(self, input_dim, hidden_dims, latent_dim, channels=3):
@@ -118,8 +181,9 @@ class MultiChannelLinearAutoencoder(nn.Module):
         else:
             # Stack reconstructions: list of (batch_size, features) -> (batch_size, features, channels)
             reconstructed_stack = torch.stack(reconstructions, dim=2)
-            return reconstructed_stack  # Shape: (batch_size, features, channels)
-#%%
+            # Shape: (batch_size, features, channels)
+            return reconstructed_stack
+# %%
 # if __name__ == "__main__":
 #     # Configuration
 #     input_dim = 100
@@ -132,6 +196,7 @@ class MultiChannelLinearAutoencoder(nn.Module):
 #     # Dummy data
 #     x = torch.randn(10, input_dim)  # Batch size of 10
 
+
 #     # Get the latent representation
 #     latent = model(x, return_latent=True)
 #     print(f"Latent shape: {latent.shape}")
@@ -139,7 +204,7 @@ class MultiChannelLinearAutoencoder(nn.Module):
 #     reconstructed = model(x, return_latent=False)
 #     print(f"Reconstructed shape: {reconstructed.shape}")
 # %%
-if __name__ == "__main__":
+if False:  # __name__ == "__main__":
     # Configuration
     input_dim = 100          # Number of input features per channel
     encoder_dims = [64, 32, 16]  # Encoder layer sizes
@@ -147,7 +212,8 @@ if __name__ == "__main__":
     channels = 3             # Number of channels (e.g., RGB)
 
     # Instantiate the model
-    model = MultiChannelLinearAutoencoder(input_dim=input_dim, hidden_dims=encoder_dims, latent_dim=latent_dim, channels=channels)
+    model = MultiChannelLinearAutoencoder(
+        input_dim=input_dim, hidden_dims=encoder_dims, latent_dim=latent_dim, channels=channels)
     print(model)
 
     # Test with different batch sizes
@@ -157,9 +223,12 @@ if __name__ == "__main__":
 
         # Get latent representations
         latent = model(x, return_latent=True)
-        print(f"Batch size: {batch_size}, Latent shape: {latent.shape}")  # Expected: (batch_size, latent_dim, channels)
+        # Expected: (batch_size, latent_dim, channels)
+        print(f"Batch size: {batch_size}, Latent shape: {latent.shape}")
 
         # Get reconstructed input
         reconstructed = model(x, return_latent=False)
-        print(f"Batch size: {batch_size}, Reconstructed shape: {reconstructed.shape}")  # Expected: (batch_size, features, channels)
+        # Expected: (batch_size, features, channels)
+        print(
+            f"Batch size: {batch_size}, Reconstructed shape: {reconstructed.shape}")
 # %%

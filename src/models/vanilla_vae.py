@@ -9,7 +9,7 @@ from models.base_vae import BaseVAE
 from models.encoders import ConvEncoder
 from models.decoders import ConvDecoder
 #%%
-class VanillaVAE(nn.Module): # BaseVAE):
+class VanillaVAE(BaseVAE): #nn.Module
     def __init__(self,
                 latent_dim: int,
                 in_channels: int = 3,
@@ -19,6 +19,7 @@ class VanillaVAE(nn.Module): # BaseVAE):
                 **kwargs) -> None:
         super().__init__()
 
+        self.example_input_array = torch.zeros(1, in_channels, width, height)
         self.latent_dim = latent_dim
         self.in_channels = in_channels
         if hidden_dims is None:
@@ -29,7 +30,7 @@ class VanillaVAE(nn.Module): # BaseVAE):
 
         # Compute the shape of the encoder output
         with torch.no_grad():
-            self.raw_encout_shape= self.encoder(torch.zeros(1, in_channels, width, height)).shape
+            self.raw_encout_shape= self.encoder(self.example_input_array).shape
 
         self.flatten_dim = self.raw_encout_shape[1:].numel()
         self.fc_mu = nn.Linear(self.flatten_dim, latent_dim)
